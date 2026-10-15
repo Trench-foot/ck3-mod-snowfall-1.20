@@ -1,7 +1,4 @@
 Includes = {
-	# MOD(godherja-snowfall)
-	"cw/random.fxh"
-	# END MOD
 	"jomini/countrynames.fxh"
 	"jomini/jomini_fog.fxh"
 	# MOD(godherja-snowfall)
@@ -11,6 +8,8 @@ Includes = {
 	"standardfuncsgfx.fxh"
 	"cw/lighting.fxh"
 	"jomini/jomini_lighting.fxh"
+	"jomini/jomini_water.fxh"
+	"clouds.fxh"
 }
 
 VertexShader =
@@ -71,7 +70,18 @@ PixelShader =
 		SampleModeV = "Clamp"
 		Type = "Cube"
 	}
-	
+	TextureSampler MapNameOverlayTexture
+	{
+		Index = 13
+		MagFilter = "Linear"
+		MinFilter = "Linear"
+		MipFilter = "Linear" 
+		SampleModeU = "Wrap"
+		SampleModeV = "Wrap"
+		File = "gfx/map/textures/rough_texture_overlay.dds"
+		sRGB = no
+	}
+
 	MainCode MapNamePixelShader
 	{
 		Input = "VS_OUTPUT_MAPNAME"
@@ -80,45 +90,102 @@ PixelShader =
 		[[
 			PDX_MAIN
 			{
-			float4 TextColor = float4( 0, 0, 0, 1 );
-			float4 OutlineColor = float4( 1, 1, 1, 1 );
+				#define TEXT_COLOR_FLATMAP float3( 0.006f, 0.005f, 0.005f )
+				#define OUTLINE_COLOR_FLATMAP float3( 0.2f, 0.18f, 0.18f )
 
-			float Sample = PdxTex2D( FontAtlas, Input.TexCoord ).r;
-			
-			float2 TextureCoordinate = Input.TexCoord * TextureSize;
-			float Ratio = CalcTexelPixelRatio( TextureCoordinate );
-			
-			float Smoothing = 0.2f + Ratio * LodFactor;
-			float Mid = 0.52f;
+				#define TEXT_COLOR_CLEAR float3( 0.018f, 0.014f, 0.014f )
+				#define TEXT_COLOR_FOW float3( 0.006f, 0.006f, 0.012f )
+				#define TEXT_COLOR_CLOUD_SHADOW float3( 0.01f, 0.01f, 0.016f )
 
-			float Factor = smoothstep( Mid - Smoothing, Mid, Sample );
+				#define OUTLINE_COLOR_CLEAR float3( 0.3f, 0.25f, 0.25f )
+				#define OUTLINE_COLOR_FOW float3( 0.2f, 0.2f, 0.2f )
+				#define OUTLINE_COLOR_CLOUD_SHADOW float3( 0.07f, 0.07f, 0.1f )
 
-			float4 MixedColor = lerp( OutlineColor, TextColor, Factor );
+				#define OUTLINE_WIDTH 0.4f
+				#define OUTLINE_SOFT_EDGE_SCALE 2.5f
+				#define OUTLINE_ALPHA_SCALE 0.2f
+				#define OUTLINE_NOISE_VARIATION_MIN 0.2f
+				#define OUTLINE_NOISE_VARIATION_MAX 0.8f 
 
-			// Set OutlineWidth to control outline width
-			float OutlineWidth = 0.1;
-			float OutlineSmoothing = OutlineWidth + Ratio * LodFactor * 0.4f;
-			float OutlineFactor = smoothstep( Mid - OutlineSmoothing, Mid, Sample );
-			MixedColor.a *= OutlineFactor;
-			
-			MixedColor.a *= Transparency;
+				float Sample = PdxTex2D( FontAtlas, Input.TexCoord ).r;
+				float2 TextureCoordinate = Input.TexCoord * TextureSize;
+				float Ratio = CalcTexelPixelRatio( TextureCoordinate );
 
-			// MOD(godherja-snowfall)
-			//MixedColor.rgb = ApplyFogOfWar( MixedColor.rgb, Input.WorldSpacePos, FogOfWarAlpha );
-			MixedColor.rgb = GH_ApplyAtmosphericEffects( MixedColor.rgb, Input.WorldSpacePos, FogOfWarAlpha );
-			// END MOD
-			MixedColor.rgb = ApplyDistanceFog( MixedColor.rgb, Input.WorldSpacePos );
-			
-			// Apply lighting and shadows, only if we're fully in flat-map mode
-			if ( HasFlatMapLightingEnabled == 1 && FlatMapLerp > 0.0 )
-			{
-				float ShadowTerm = CalculateShadow( Input.ShadowProj, ShadowMap );
-				SMaterialProperties NamesMaterialProps = GetMaterialProperties( MixedColor.rgb, float3( 0.0, 1.0, 0.0 ), 1.0, 0.0, 0.0 );
-				SLightingProperties NamesLightingProps = GetSunLightingProperties( Input.WorldSpacePos, ShadowTerm );
-				MixedColor.rgb = CalculateSunLighting( NamesMaterialProps, NamesLightingProps, EnvironmentMap );
-			}
-			
-			return MixedColor;
+				#define TEXT_WIDTH 0.05f
+				// Interior transition
+				float InteriorMid = 0.50f;
+				float InteriorSmoothing = TEXT_WIDTH;
+				float InteriorFactor = smoothstep(
+					InteriorMid - InteriorSmoothing,
+					InteriorMid,
+					Sample
+				);
+
+				// Define a scaling factor for the UV coordinates
+				float2 InteriorUVScale = float2( 20.0f, 20.0f );
+				float2 OutlineUVScale = float2( 50.0f, 30.0f );
+
+				// Scale the texture coordinates 
+				float2 InteriorScaledTexCoord = Input.TexCoord * InteriorUVScale;
+				float2 OutlineScaledTexCoord = Input.TexCoord * OutlineUVScale;
+
+				// Sample the overlay texture with scaled coordinates
+				float4 InteriorOverlayColor = PdxTex2D( MapNameOverlayTexture, InteriorScaledTexCoord );
+				float4 OutlineOverlayColor = PdxTex2D( MapNameOverlayTexture, OutlineScaledTexCoord );
+				float NoiseVariation = lerp( OUTLINE_NOISE_VARIATION_MIN, OUTLINE_NOISE_VARIATION_MAX, OutlineOverlayColor.a );
+
+				// Outline calculation
+				float OutlineSmoothing = OUTLINE_WIDTH + Ratio * LodFactor * 0.4f;
+				float OutlineFactor = pow( smoothstep(
+					InteriorMid - OutlineSmoothing * NoiseVariation,
+					InteriorMid - InteriorSmoothing,
+					Sample
+				), OUTLINE_SOFT_EDGE_SCALE );
+				OutlineFactor *= OUTLINE_ALPHA_SCALE;
+
+				float4 MixedColor;
+				if ( FlatMapLerp != 1.0f )
+				{
+					float FogOfWarAlphaValue = PdxTex2D( FogOfWarAlpha, 
+						Input.WorldSpacePos.xz * InverseWorldSize ).r;
+
+					// Get cloud shadow mask
+					float CloudMask = GetCloudShadowMask( Input.WorldSpacePos.xz, FogOfWarAlphaValue );
+					
+					// Interpolate colors based on FoW
+					float3 TextColor = lerp( TEXT_COLOR_FOW, 
+						TEXT_COLOR_CLEAR, FogOfWarAlphaValue );
+					float3 OutlineColor = lerp( OUTLINE_COLOR_FOW, 
+						OUTLINE_COLOR_CLEAR, FogOfWarAlphaValue );
+
+					// Apply cloud shadow color modification
+					TextColor = lerp( TextColor, TEXT_COLOR_CLOUD_SHADOW, CloudMask );
+					OutlineColor = lerp( OutlineColor, OUTLINE_COLOR_CLOUD_SHADOW, CloudMask );
+
+					// Combine colors
+					MixedColor.rgb = lerp( OutlineColor, TextColor, InteriorFactor );
+					MixedColor.a = max( OutlineFactor, InteriorFactor ) * Transparency;
+
+					// MOD(godherja-snowfall)
+					// Vanilla handles FoW via color selection here since 1.17; apply snowfall only.
+					MixedColor.rgb = GH_ApplySnowfall( MixedColor.rgb, Input.WorldSpacePos );
+					// END MOD
+					// Apply distance fog
+					MixedColor.rgb = ApplyMapDistanceFogWithoutFoW( MixedColor.rgb, 
+						Input.WorldSpacePos );
+				}
+				else
+				{
+					// Flat map mode - use clear colors
+					MixedColor.rgb = lerp( OUTLINE_COLOR_FLATMAP, TEXT_COLOR_FLATMAP, InteriorFactor );
+					MixedColor.a = max( OutlineFactor, InteriorFactor ) * Transparency;
+				}
+
+				// Apply overlay blend mode with blend factor
+				float BlendFactor = 0.5f; // Can be adjusted as needed
+				float3 OverlayedColor = Overlay( MixedColor.rgb, InteriorOverlayColor.rgb );
+				MixedColor.rgb = lerp( MixedColor.rgb, OverlayedColor, BlendFactor );
+				return MixedColor;
 			}
 		]]
 	}
@@ -138,7 +205,7 @@ RasterizerState RasterizerState
 	frontccw = yes
 }
 
-# This makes the man names appear 'under' map objects, while actually being above them
+# This makes the map names appear 'under' map objects, while actually being above them
 # Doesn't use the normal depthbuffer, but instead a specific stencil-buffer written into by other objects.
 DepthStencilState DepthStencilStateFromStencil
 {

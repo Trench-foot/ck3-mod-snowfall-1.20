@@ -1,7 +1,7 @@
 <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=2905322430"><img src="https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fshieldsio-steam-workshop.jross.me%2F2905322430&style=for-the-badge" alt="Steam Workshop subscribers"></a>
 
-Snowfall Visual Effect
-======================
+Snowfall Visual Effect - 1.20
+=============================
 _(a Crusader Kings III mod)_
 
 This repository contains CK3 mod files which implement shader-based seasonal snowfall effect on the map, originally made for [**Godherja: The Dying World**](https://steamcommunity.com/sharedfiles/filedetails/?id=2326030123), tied to the winter severity system provided by vanilla CK3.
@@ -9,7 +9,7 @@ This repository contains CK3 mod files which implement shader-based seasonal sno
 
 ![Animated GIF with rotating camera showing snow falling on a small part of CK3 terrain](https://media.githubusercontent.com/media/terrapass/ck3-mod-snowfall/master/promo/ck3_snowfall_0.gif)
 
-**The code is up-to-date as of CK3 v1.16 (Chamfron).**
+**The code is up-to-date as of CK3 v1.20.1 (Crozier).**
 
 The contents of `mod/` directory in this repo are at the same time a small working mod in their own right, as well as a set of files ready for integration into any larger mods or total conversions, interested in having more atmospheric (pun intended) visual effects on the map. See [Integrating into Your Mod](#integration) for details.
 
@@ -28,7 +28,7 @@ The effect was originally developed for **Godherja: The Dying World** - a popula
 
 This upload is intended for vanilla CK3 and other mods. Don't use it together with **Godherja** in the same playset.
 
-**Mod files are up-to-date as of CK3 v1.8.1 (Robe).**
+**Mod files are up-to-date as of CK3 v1.20.1 (Crozier).**
 
 **Does not require starting a new game.** Can be safely added or removed without affecting your savegame.
 

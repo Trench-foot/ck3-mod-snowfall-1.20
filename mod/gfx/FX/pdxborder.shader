@@ -1,8 +1,6 @@
 Includes = {
-	# MOD(godherja-snowfall)
-	"cw/random.fxh"
-	# END MOD
 	"cw/camera.fxh"
+	"cw/lighting.fxh"
 	"jomini/jomini_flat_border.fxh"
 	"jomini/jomini_fog.fxh"
 	# MOD(godherja-snowfall)
@@ -11,6 +9,10 @@ Includes = {
 	# END MOD
 	"jomini/jomini_lighting.fxh"
 	"standardfuncsgfx.fxh"
+	"shadow_tint.fxh"
+	"cw/pdxterrain.fxh"
+	"clouds.fxh"
+	"jomini/map_lighting.fxh"
 }
 
 VertexStruct VS_OUTPUT_PDX_BORDER
@@ -41,7 +43,7 @@ VertexShader =
 				Out.WorldSpacePos = position;
 				Out.Position = FixProjectionAndMul( ViewProjectionMatrix, float4( position, 1.0 ) );
 				Out.UV = Input.UV;
-			
+
 				Out.ShadowProj = mul( ShadowMapTextureMatrix, float4( Out.WorldSpacePos, 1.0 ) );
 
 				return Out;
@@ -92,8 +94,64 @@ PixelShader =
 		SampleModeV = "Clamp"
 		Type = "Cube"
 	}
-	
+	TextureSampler SurroundFlatMapMask
+	{
+		Ref = SurroundFlatMapMask
+		MagFilter = "Linear"
+		MinFilter = "Linear"
+		MipFilter = "Linear"
+		SampleModeU = "Border"
+		SampleModeV = "Border"
+		Border_Color = { 1 1 1 1 }
+		File = "gfx/map/surround_map/surround_mask.dds"
+	}
+
 	MainCode PixelShader
+	{
+		Input = "VS_OUTPUT_PDX_BORDER"
+		Output = "PDX_COLOR"
+		Code
+		[[			
+			PDX_MAIN
+			{	
+				float2 MapCoords = Input.WorldSpacePos.xz * WorldSpaceToTerrain0To1;
+				if ( FlatMapLerp > 0.001f )
+				{
+					float FlatMapMask = 1.0f - PdxTex2D( SurroundFlatMapMask, float2( MapCoords.x, 1.0f - MapCoords.y ) ).b;
+					clip( FlatMapMask - 0.1f );
+				}
+				float4 Diffuse = PdxTex2D( BorderTexture, Input.UV );
+				float3 BaseDiffuse = Diffuse.rgb;
+				// Get FoW value and darken the border in FoW areas
+
+				float FogOfWarAlphaValue = PdxTex2D( FogOfWarAlpha, MapCoords ).r;
+				Diffuse.rgb *= ( 0.3f + 0.7f * FogOfWarAlphaValue ); // Darken to 30% in FoW
+				Diffuse.rgb = lerp( BaseDiffuse, Diffuse.rgb, 0.03f );
+				Diffuse.a *= _Alpha;
+				#ifndef LOW_SPEC_SHADERS
+					if ( _StartColorOverlayHeightBlend < 0.00001f )
+					{
+						float ShadowTerm = CalculateShadow( Input.ShadowProj, ShadowMap );
+						// Apply shadow tint with cloud interaction for borders
+						float CloudMask = GetCloudShadowMask( Input.WorldSpacePos.xz, FogOfWarAlphaValue );
+						Diffuse.rgb = ApplyTerrainShadowTintWithClouds( Diffuse.rgb, Input.WorldSpacePos.xz, CloudMask, ShadowTerm );
+						
+						float3 CloudyColor = float3( 0.0f, 0.01f, 0.02f );
+						Diffuse.rgb = lerp( Diffuse.rgb, CloudyColor, CloudMask * 0.6f );
+					}
+				#endif
+				// MOD(godherja-snowfall)
+				//Diffuse.rgb = ApplyFogOfWar( Diffuse.rgb, Input.WorldSpacePos, FogOfWarAlpha );
+				Diffuse.rgb = GH_ApplyAtmosphericEffects( Diffuse.rgb, Input.WorldSpacePos, FogOfWarAlpha );
+				// END MOD
+				Diffuse.rgb = ApplyMapDistanceFogWithoutFoW( Diffuse.rgb, Input.WorldSpacePos );
+
+				return Diffuse;
+			}
+		]]
+	}
+	
+	MainCode PixelShaderWar
 	{
 		Input = "VS_OUTPUT_PDX_BORDER"
 		Output = "PDX_COLOR"
@@ -102,29 +160,89 @@ PixelShader =
 			PDX_MAIN
 			{
 				float4 Diffuse = PdxTex2D( BorderTexture, Input.UV );
-
+				
+				// Tweakable values
+				float BaseSpeed = 1.0f;
+				float WaveLength = 4.0f;
+				float MinAlpha = 0.1f;
+				float PulseFrequency = 0.8f; // How fast the speed pulses
+				float PulseAmplitude = 0.4f; // How much the speed varies (0-1)
+				float SpeedBrightnessBoost = 1.0f; // How much brighter when fast
+				float CometSharpness = 12.0f; // Leading edge sharpness
+				float CometTailLength = 0.7f; // How long the tail extends (0-1) 
+				float BrightnessPhaseLeadFactor = 0.3f; // How much brightness anticipates motion
+				
+				// Wave movement with variable speed
+				float PulsePhase = PulseFrequency * GlobalTime * 6.28318f;
+				
+				// Position calculation using smooth sine integration
+				float BaseOffset = BaseSpeed * GlobalTime;
+				float PulseOffset = BaseSpeed * PulseAmplitude * 
+					(1.0f - cos(PulsePhase)) / (PulseFrequency * 6.28318f);
+				float Offset = BaseOffset + PulseOffset;
+				
+				// Brightness synchronized with movement speed
+				// Apply slight phase lead so brightness anticipates motion
+				float BrightnessPhase = PulsePhase + BrightnessPhaseLeadFactor;
+				float BrightnessSpeed = BaseSpeed * 
+					(1.0f + PulseAmplitude * sin(BrightnessPhase));
+				
+				float Wave = frac(Input.UV.x / WaveLength + Offset);
+				
+				// Create comet-like wave shape: sharp front, soft tail
+				
+				// Build asymmetric profile
+				float WaveShape;
+				if (Wave < 0.5f) {
+					// Leading half - sharp rise to peak
+					float t = Wave * 2.0f; // 0 to 1
+					WaveShape = pow(t, CometSharpness);
+				} else {
+					// Trailing half - gradual falloff for comet tail
+					float t = (1.0f - Wave) * 2.0f; // 1 to 0 as we go back
+					// Exponential decay for natural comet tail
+					float TailFalloff = 1.0f + CometTailLength * 3.0f;
+					WaveShape = pow(t, 1.0f / TailFalloff);
+				}
+				
+				// Add subtle glow at the very front for extra impact
+				float FrontGlow = exp(-Wave * 20.0f) * 0.3f;
+				WaveShape = saturate(WaveShape + FrontGlow);
+				
+				// Vary brightness based on visual movement speed
+				float SpeedFactor = BrightnessSpeed / BaseSpeed;
+				float BrightnessMultiplier = 1.0f + (SpeedFactor - 1.0f) * SpeedBrightnessBoost;
+				float3 GlowColor = Diffuse.rgb * 2.5f * BrightnessMultiplier;
+				Diffuse.rgb = lerp(Diffuse.rgb, GlowColor, WaveShape);
+				float WaveAlpha = lerp(MinAlpha, 1.0f, WaveShape);
+				Diffuse.a *= WaveAlpha;
+				
+				//Standard 
 				// MOD(godherja-snowfall)
 				//Diffuse.rgb = ApplyFogOfWar( Diffuse.rgb, Input.WorldSpacePos, FogOfWarAlpha );
 				Diffuse.rgb = GH_ApplyAtmosphericEffects( Diffuse.rgb, Input.WorldSpacePos, FogOfWarAlpha );
 				// END MOD
-				Diffuse.rgb = ApplyDistanceFog( Diffuse.rgb, Input.WorldSpacePos );
-				Diffuse.a *= _Alpha;
+				Diffuse.rgb = ApplyMapDistanceFogWithoutFoW( Diffuse.rgb, Input.WorldSpacePos );
 				
-				// Apply shadows, only if we're fully in flat-map mode
- 				if ( HasFlatMapLightingEnabled == 1 && FlatMapLerp > 0.0 )
-				{
-					float ShadowTerm = CalculateShadow( Input.ShadowProj, ShadowMap );
-					SMaterialProperties MaterialProps = GetMaterialProperties( Diffuse.rgb, float3( 0.0, 1.0, 0.0 ), 1.0, 0.0, 0.0 );
-					SLightingProperties LightingProps = GetSunLightingProperties( Input.WorldSpacePos, ShadowTerm );
-					Diffuse.rgb = CalculateSunLighting( MaterialProps, LightingProps, EnvironmentMap );
-				}
+				Diffuse.a *= _Alpha;
+
+				#ifndef LOW_SPEC_SHADERS
+					if ( _StartColorOverlayHeightBlend < 0.00001f )
+					{
+						float ShadowTerm = CalculateShadow( Input.ShadowProj, ShadowMap );
+						// Apply shadow tint with cloud interaction for war borders
+						float CloudMask = GetCloudShadowMask( Input.WorldSpacePos.xz );
+						Diffuse.rgb = ApplyTerrainShadowTintWithClouds( Diffuse.rgb, Input.WorldSpacePos.xz, CloudMask, ShadowTerm );
+					}
+				#endif
 
 				return Diffuse;
 			}
 		]]
 	}
-	
-	MainCode PixelShaderWar
+
+
+	MainCode PixelShaderWarOldAnimation
 	{
 		Input = "VS_OUTPUT_PDX_BORDER"
 		Output = "PDX_COLOR"
@@ -141,17 +259,18 @@ PixelShader =
 				//Diffuse.rgb = ApplyFogOfWar( Diffuse.rgb, Input.WorldSpacePos, FogOfWarAlpha );
 				Diffuse.rgb = GH_ApplyAtmosphericEffects( Diffuse.rgb, Input.WorldSpacePos, FogOfWarAlpha );
 				// END MOD
-				Diffuse.rgb = ApplyDistanceFog( Diffuse.rgb, Input.WorldSpacePos );
+				Diffuse.rgb = ApplyMapDistanceFogWithoutFoW( Diffuse.rgb, Input.WorldSpacePos );
 				Diffuse.a *= _Alpha;
-				
-				// Apply shadows, only if we're fully in flat-map mode
- 				if ( HasFlatMapLightingEnabled == 1 && FlatMapLerp > 0.0 )
-				{
-					float ShadowTerm = CalculateShadow( Input.ShadowProj, ShadowMap );
-					SMaterialProperties MaterialProps = GetMaterialProperties( Diffuse.rgb, float3( 0.0, 1.0, 0.0 ), 1.0, 0.0, 0.0 );
-					SLightingProperties LightingProps = GetSunLightingProperties( Input.WorldSpacePos, ShadowTerm );
-					Diffuse.rgb = CalculateSunLighting( MaterialProps, LightingProps, EnvironmentMap );
-				}
+
+				#ifndef LOW_SPEC_SHADERS
+					if ( _StartColorOverlayHeightBlend < 0.00001f )
+					{
+						float ShadowTerm = CalculateShadow( Input.ShadowProj, ShadowMap );
+						// Apply shadow tint with cloud interaction for war borders
+						float CloudMask = GetCloudShadowMask( Input.WorldSpacePos.xz );
+						Diffuse.rgb = ApplyTerrainShadowTintWithClouds( Diffuse.rgb, Input.WorldSpacePos.xz, CloudMask, ShadowTerm );
+					}
+				#endif
 
 				return Diffuse;
 			}
@@ -168,30 +287,20 @@ PixelShader =
 			{
 				float4 Diffuse = PdxTex2D( BorderTexture, Input.UV );
 
-				// _UserId is 1 if struggle is highlighted and 0 if not
 				float Highlight = float( _UserId );
 
-				float lowColorMult = 0.3f;
-				float colorMult = lowColorMult + ( ( 1.0f - lowColorMult ) * Highlight );
+				float LowColorMult = 0.3f;
+				float ColorMult = LowColorMult + ( ( 1.0f - LowColorMult ) * Highlight );
 
-				Diffuse.rgb = saturate( Diffuse.rgb * colorMult );
+				Diffuse.rgb = saturate( Diffuse.rgb * ColorMult );
 
 				// MOD(godherja-snowfall)
 				//Diffuse.rgb = ApplyFogOfWar( Diffuse.rgb, Input.WorldSpacePos, FogOfWarAlpha );
 				Diffuse.rgb = GH_ApplyAtmosphericEffects( Diffuse.rgb, Input.WorldSpacePos, FogOfWarAlpha );
 				// END MOD
-				Diffuse.rgb = ApplyDistanceFog( Diffuse.rgb, Input.WorldSpacePos );
+				Diffuse.rgb = ApplyMapDistanceFogWithoutFoW( Diffuse.rgb, Input.WorldSpacePos );
+				
 				Diffuse.a *= _Alpha;
-
-				// Apply shadows, only if we're fully in flat-map mode
- 				if ( HasFlatMapLightingEnabled == 1 && FlatMapLerp > 0.0 )
-				{
-					float ShadowTerm = CalculateShadow( Input.ShadowProj, ShadowMap );
-					SMaterialProperties MaterialProps = GetMaterialProperties( Diffuse.rgb, float3( 0.0, 1.0, 0.0 ), 1.0, 0.0, 0.0 );
-					SLightingProperties LightingProps = GetSunLightingProperties( Input.WorldSpacePos, ShadowTerm );
-					Diffuse.rgb = CalculateSunLighting( MaterialProps, LightingProps, EnvironmentMap );
-				}
-
 				return Diffuse;
 			}
 		]]
@@ -237,7 +346,7 @@ Effect PdxBorder
 Effect PdxBorderWar
 {
 	VertexShader = "VertexShader"
-	PixelShader = "PixelShaderWar"
+	PixelShader = "PixelShaderWarOldAnimation"
 }
 
 Effect PdxBorderStruggle
