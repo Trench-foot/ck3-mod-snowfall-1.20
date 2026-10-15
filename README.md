@@ -4,6 +4,13 @@ Snowfall Visual Effect - 1.20
 =============================
 _(a Crusader Kings III mod)_
 
+> **Maintained fork:** I ([Trench-foot](https://github.com/Trench-foot)) updated this mod for
+> CK3 v1.20.1 (Crozier). It is a fork of [terrapass/ck3-mod-snowfall](https://github.com/terrapass/ck3-mod-snowfall),
+> and I am sharing the updated version publicly until either the original author updates the
+> original mod, or asks that I remove this fork - I will comply with either. The update was made
+> with the assistance of **Hermes**, the Nous Research agent
+> ([hermes-agent.nousresearch.com](https://hermes-agent.nousresearch.com)).
+
 This repository contains CK3 mod files which implement shader-based seasonal snowfall effect on the map, originally made for [**Godherja: The Dying World**](https://steamcommunity.com/sharedfiles/filedetails/?id=2326030123), tied to the winter severity system provided by vanilla CK3.
 <a name="demo"></a>
 
